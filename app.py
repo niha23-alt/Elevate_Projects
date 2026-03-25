@@ -1,138 +1,39 @@
-import streamlit as st
-import numpy as np
-import pandas as pd
-import yfinance as yf
-import matplotlib.pyplot as plt
+from flask import Flask, request, jsonify, render_template
+from model import get_response
+from utils import filter_input, empathy_layer, log_chat
 
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import load_model
-import ta
+app = Flask(__name__)
 
-# ------------------------------------
-# Page Config
-# ------------------------------------
-st.set_page_config(page_title="Stock Price Prediction using LSTM", layout="wide")
+@app.route("/")
+def home():
+    return render_template("index.html")
 
-st.title(" Stock Price Trend Prediction using LSTM")
-st.write("Predict future stock prices using historical data and LSTM deep learning model")
+@app.route("/chat", methods=["POST"])
+def chat():
+    user_input = request.json.get("message")
 
-# ------------------------------------
-# Sidebar Inputs
-# ------------------------------------
-st.sidebar.header("User Input")
+    filtered = filter_input(user_input)
+    if filtered:
+        return jsonify({"response": filtered})
 
-ticker = st.sidebar.text_input("Stock Ticker", "AAPL")
-start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2015-01-01"))
-end_date = st.sidebar.date_input("End Date", pd.to_datetime("2025-01-01"))
+    response = get_response(user_input)
+    response = empathy_layer(user_input, response)
 
-run_button = st.sidebar.button("Run Prediction")
+    log_chat(user_input, response)
 
-# ------------------------------------
-# Load Model
-# ------------------------------------
-@st.cache_resource
-def load_lstm():
-    return load_model("lstm_stock_model.h5")
+    return jsonify({"response": response})
 
-model = load_lstm()
+import os
+import uvicorn
+from fastapi import FastAPI
 
-# ------------------------------------
-# Main Logic
-# ------------------------------------
-if run_button:
-    st.subheader(f" Stock Data: {ticker}")
+app = FastAPI()
 
-    df = yf.download(ticker, start=start_date, end=end_date)
+@app.get("/")
+def read_root():
+    return {"message": "App is running"}
 
-    # FIX for MultiIndex columns
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    if df.empty:
-        st.error("Invalid ticker or no data available.")
-        st.stop()
-
-    # ------------------------------------
-    # Feature Engineering
-    # ------------------------------------
-    df["MA_20"] = df["Close"].rolling(20).mean()
-    df["MA_50"] = df["Close"].rolling(50).mean()
-    df["RSI"] = ta.momentum.RSIIndicator(df["Close"], 14).rsi()
-    df.dropna(inplace=True)
-
-    st.dataframe(df.tail())
-
-    # ------------------------------------
-    # Price + MA Plot
-    # ------------------------------------
-    st.subheader(" Closing Price with Moving Averages")
-
-    fig1, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.plot(df["Close"], label="Close")
-    ax1.plot(df["MA_20"], label="MA 20")
-    ax1.plot(df["MA_50"], label="MA 50")
-    ax1.legend()
-    st.pyplot(fig1)
-
-    # ------------------------------------
-    # RSI Plot
-    # ------------------------------------
-    st.subheader(" Relative Strength Index (RSI)")
-
-    fig2, ax2 = plt.subplots(figsize=(10, 3))
-    ax2.plot(df["RSI"])
-    ax2.axhline(70, linestyle="--")
-    ax2.axhline(30, linestyle="--")
-    st.pyplot(fig2)
-
-    # ------------------------------------
-    # Scaling
-    # ------------------------------------
-    features = ["Close", "MA_20", "MA_50", "RSI"]
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(df[features])
-
-    # ------------------------------------
-    # Create Sequences
-    # ------------------------------------
-    TIME_STEPS = 60
-    X = []
-
-    for i in range(TIME_STEPS, len(scaled)):
-        X.append(scaled[i - TIME_STEPS:i])
-
-    X = np.array(X)
-
-    # ------------------------------------
-    # Prediction
-    # ------------------------------------
-    preds = model.predict(X)
-
-    close_scaler = MinMaxScaler()
-    close_scaler.min_, close_scaler.scale_ = scaler.min_[0], scaler.scale_[0]
-
-    actual = close_scaler.inverse_transform(
-        scaled[TIME_STEPS:, 0].reshape(-1, 1)
-    )
-    predicted = close_scaler.inverse_transform(preds)
-
-    # ------------------------------------
-    # Actual vs Predicted Plot
-    # ------------------------------------
-    st.subheader(" Actual vs Predicted Prices")
-
-    fig3, ax3 = plt.subplots(figsize=(10, 4))
-    ax3.plot(actual, label="Actual")
-    ax3.plot(predicted, label="Predicted")
-    ax3.legend()
-    st.pyplot(fig3)
-
-    # ------------------------------------
-    # Next Day Prediction
-    # ------------------------------------
-    last_seq = scaled[-TIME_STEPS:].reshape(1, TIME_STEPS, len(features))
-    next_day = model.predict(last_seq)
-    next_price = close_scaler.inverse_transform(next_day)
-
-
-    st.success(f" Predicted Next Day Closing Price: ${next_price[0][0]:.2f}")
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+    

@@ -1,8 +1,2 @@
-streamlit
-yfinance
-pandas
-numpy
-matplotlib
-scikit-learn
-tensorflow
-ta
+flask==3.0.0
+gunicorn
